@@ -31,5 +31,23 @@ namespace Azure.AI.OpenAI
 
             return new Choice(text, index, logProbabilityModel, finishReason);
         }
+
+        /// <summary> Initializes a new instance of ChatCompletions. </summary>
+        /// <param name="id"> A unique identifier associated with this chat completions response. </param>
+        /// <param name="created"> The first timestamp associated with generation activity for this completions response. </param>
+        /// <param name="choices"> The collection of completions choices associated with this completions response. </param>
+        /// <param name="usage"> Usage information for tokens processed and generated as part of this completions operation. </param>
+        /// <returns> A new <see cref="OpenAI.ChatCompletions"/> instance for mocking. </returns>
+        public static ChatCompletions ChatCompletions(string id = null, DateTimeOffset created = default(DateTimeOffset), IEnumerable<Choice> choices = null, CompletionsUsage usage = null)
+        {
+            choices ??= new List<Choice>();
+            usage ??= AzureOpenAIModelFactory.CompletionsUsage();
+
+            return new ChatCompletions(
+                id: id ?? string.Empty,
+                internalCreatedSecondsAfterUnixEpoch: created.ToUnixTimeSeconds(),
+                choices: choices,
+                usage: usage);
+        }
     }
 }
