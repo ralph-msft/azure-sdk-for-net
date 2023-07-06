@@ -14,13 +14,13 @@ $ErrorActionPreference = "Stop"
 . $PSScriptRoot/common.ps1
 Install-ModuleIfNotInstalled "powershell-yaml" "0.4.1" | Import-Module
 
-function NpmInstallForProject([string]$workingDirectory, [bool]$useDevRepo) {
+function NpmInstallForProject([string]$workingDirectory, [bool]$keepLocal) {
     Push-Location $workingDirectory
     try {
         $currentDur = Resolve-Path "."
         Write-Host "Generating from $currentDur"
 
-        if (!$useDevRepo) {
+        if (!$keepLocal) {
             if (Test-Path "package.json") {
                 Remove-Item -Path "package.json" -Force
             }
@@ -56,7 +56,7 @@ function NpmInstallForProject([string]$workingDirectory, [bool]$useDevRepo) {
         }
 
         $npmCommand = "npm install"
-        if (!$useDevRepo) {
+        if (!$keepLocal) {
             $npmCommand += " --no-package-lock"
         }
 
@@ -78,13 +78,18 @@ $configuration = Get-Content -Path $typespecConfigurationFile -Raw | ConvertFrom
 
 $specSubDirectory = $configuration["directory"]
 $innerFolder = Split-Path $specSubDirectory -Leaf
-$useDevRepo = $false
+$devMode = $ENV:ENABLE_TYPESPEC_DEV_REPO -eq "1" -and $configuration["devEnlistment"]
 
-if ($configuration["devRepoPath"]) {
-    $tempFolder = Join-Path "$($configuration["devRepoPath"])" "$specSubDirectory"
-    $npmWorkingDir = Resolve-Path $tempFolder
-
-    $useDevRepo = $true
+if ($devMode) {
+    # dev enlistment directory may be relative to tsp-location.yaml file so change to that directory
+    Push-Location (Split-Path -Parent $typespecConfigurationFile)
+    try {
+        $tempFolder = Join-Path (Resolve-Path $configuration["devEnlistment"]) "$specSubDirectory"
+        $npmWorkingDir = $tempFolder
+    }
+    finally {
+        Pop-Location
+    }
 }
 else {
     $tempFolder = "$ProjectDirectory/TempTypeSpecFiles"
@@ -95,7 +100,7 @@ $mainTypeSpecFile = If (Test-Path "$npmWorkingDir/client.*") { Resolve-Path "$np
 
 try {
     Push-Location $npmWorkingDir
-    NpmInstallForProject $npmWorkingDir $useDevRepo
+    NpmInstallForProject $npmWorkingDir $devMode
 
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
@@ -126,7 +131,7 @@ finally {
     Pop-Location
 }
 
-$shouldCleanUp = !($SaveInputs -or $useDevRepo)
+$shouldCleanUp = !($SaveInputs -or $devMode)
 if ($shouldCleanUp) {
     Remove-Item $tempFolder -Recurse -Force
 }

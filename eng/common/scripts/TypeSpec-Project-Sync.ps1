@@ -100,19 +100,72 @@ $pieces = $typespecConfigurationFile.Path.Replace("\", "/").Split("/")
 $projectName = $pieces[$pieces.Count - 2]
 
 $specSubDirectory = $configuration["directory"]
+$gitCloneNeeded = $false;
+$devMode = $ENV:ENABLE_TYPESPEC_DEV_REPO -eq "1" -and $configuration["devEnlistment"]
 
-# use local spec repo if provided
-if ($configuration["devRepoPath"]) {
-  $specCloneDir = Resolve-Path "$($configuration["devRepoPath"])"
-  Write-Warning "Using existing local repo: '$specCloneDir'"
-  exit 0
+# check if development mode is enabled
+if ($devMode) {
+  $specCloneDir = $configuration["devEnlistment"]
+
+  # dev enlistment directory may be relative to tsp-location.yaml file so change to that directory
+  Push-Location (Split-Path -Parent $typespecConfigurationFile)
+  try {
+    if (!(Test-Path $specCloneDir)) {
+      $gitCloneNeeded = $true
+      New-Item "$specCloneDir" -ItemType Directory -Force | Out-Null
+      $specCloneDir = Resolve-Path $specCloneDir
+    }
+
+    $specCloneDir = Resolve-Path $specCloneDir
+    Write-Warning "Using developer mode with local repo: '$specCloneDir'"
+  }
+  finally {
+    Pop-Location
+  }
+
+  if (!$gitCloneNeeded) {
+    Push-Location $specCloneDir
+    try {
+      $remoteUrl = [uri]$(git config --get remote.origin.url)
+      if ($remoteUrl.Scheme -ne "https" -or $remoteUrl.Host -notlike "*github.com") {
+        Write-Error "Local enlistment at '$specCloneDir' is not a GitHub repo ($remoteUrl)"
+        exit 1
+      }
+
+      $githubRepo = $remoteUrl.LocalPath.TrimStart("/").TrimEnd(".git")
+      $githubCommit = $(git log --format="%H" -n 1)
+    }
+    finally {
+      Pop-Location
+    }
+
+    # update rempote url and commit as needed
+    if (($githubRepo -ne $configuration["repo"]) -or ($githubCommit -ne $configuration["commit"])) {
+      Write-Host "Updating tsp-location.yaml with new repo and/or commit"
+      $configuration["repo"] = $githubRepo
+      $configuration["commit"] = $githubCommit
+
+      $configuration | Sort-Object -Property Name | ConvertTo-Yaml | Out-File $typespecConfigurationFile -Encoding utf8NoBOM
+    }
+  }
 }
+# use local spec repo if provided
 elseif ($LocalSpecRepoPath) {
   $specCloneDir = $LocalSpecRepoPath
 }
-elseif ($configuration["repo"] -and $configuration["commit"]) {
-  # use sparse clone if repo and commit are provided
+else {
   $specCloneDir = GetSpecCloneDir $projectName
+  $gitCloneNeeded = $true
+}
+
+# use sparse clone if repo and commit are provided
+if ($gitCloneNeeded) {
+  if (!($configuration["repo"] -and $configuration["commit"])) {
+     # write error if neither local spec repo nor repo and commit are provided
+    Write-Error "Must contain both 'repo' and 'commit' in tsp-location.yaml or input 'localSpecRepoPath' parameter."
+    exit 1
+  }
+
   $gitRemoteValue = GetGitRemoteValue $configuration["repo"]
 
   Write-Host "from tsplocation.yaml 'repo' is:"$configuration["repo"]
@@ -135,18 +188,15 @@ elseif ($configuration["repo"] -and $configuration["commit"]) {
     Pop-Location
   }
 }
-else {
-  # write error if neither local spec repo nor repo and commit are provided
-  Write-Error "Must contain both 'repo' and 'commit' in tsp-location.yaml or input 'localSpecRepoPath' parameter."
-  exit 1
-}
 
-$tempTypeSpecDir = "$ProjectDirectory/TempTypeSpecFiles"
-New-Item $tempTypeSpecDir -Type Directory -Force | Out-Null
-CopySpecToProjectIfNeeded `
-  -specCloneRoot $specCloneDir `
-  -mainSpecDir $specSubDirectory `
-  -dest $tempTypeSpecDir `
-  -specAdditionalSubDirectories $configuration["additionalDirectories"]
+if (!$devMode) {
+  $tempTypeSpecDir = "$ProjectDirectory/TempTypeSpecFiles"
+  New-Item $tempTypeSpecDir -Type Directory -Force | Out-Null
+  CopySpecToProjectIfNeeded `
+    -specCloneRoot $specCloneDir `
+    -mainSpecDir $specSubDirectory `
+    -dest $tempTypeSpecDir `
+    -specAdditionalSubDirectories $configuration["additionalDirectories"]
+}
 
 exit 0
