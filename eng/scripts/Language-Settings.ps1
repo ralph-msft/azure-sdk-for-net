@@ -418,7 +418,7 @@ function EnsureCustomSource($package) {
       -AllVersions `
       -AllowPrereleaseVersions
 
-      if (!$? -or !$existingVersions) { 
+      if (!$? -or !$existingVersions) {
         Write-Host "Failed to find package $($package.Name) in custom source $customPackageSource"
         return $package
       }
@@ -564,5 +564,5 @@ function Get-dotnet-EmitterName() {
 }
 
 function Get-dotnet-EmitterAdditionalOptions([string]$projectDirectory) {
-  return "--option @azure-tools/typespec-csharp.emitter-output-dir=$projectDirectory/src"
+  return "--option @azure-tools/typespec-csharp.emitter-output-dir=$(Join-Path $projectDirectory "src")"
 }
