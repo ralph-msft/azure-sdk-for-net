@@ -1,4 +1,4 @@
 directory: specification/cognitiveservices/OpenAI.Inference
-commit: 3f1e25016991fd304dc9706cd5524a0f9fdfc774
+commit: b960cd1a237b6187d5957302b3ade0826b64c2ef
 repo: ralph-msft/azure-rest-api-specs
 devRepoPath: c:\src\openai\typespec
