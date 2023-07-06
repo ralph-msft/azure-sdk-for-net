@@ -14,26 +14,28 @@ $ErrorActionPreference = "Stop"
 . $PSScriptRoot/common.ps1
 Install-ModuleIfNotInstalled "powershell-yaml" "0.4.1" | Import-Module
 
-function NpmInstallForProject([string]$workingDirectory) {
+function NpmInstallForProject([string]$workingDirectory, [bool]$useDevRepo) {
     Push-Location $workingDirectory
     try {
         $currentDur = Resolve-Path "."
         Write-Host "Generating from $currentDur"
 
-        if (Test-Path "package.json") {
-            Remove-Item -Path "package.json" -Force
-        }
+        if (!$useDevRepo) {
+            if (Test-Path "package.json") {
+                Remove-Item -Path "package.json" -Force
+            }
 
-        if (Test-Path ".npmrc") {
-            Remove-Item -Path ".npmrc" -Force
-        }
+            if (Test-Path ".npmrc") {
+                Remove-Item -Path ".npmrc" -Force
+            }
 
-        if (Test-Path "node_modules") {
-            Remove-Item -Path "node_modules" -Force -Recurse
-        }
+            if (Test-Path "node_modules") {
+                Remove-Item -Path "node_modules" -Force -Recurse
+            }
 
-        if (Test-Path "package-lock.json") {
-            Remove-Item -Path "package-lock.json" -Force
+            if (Test-Path "package-lock.json") {
+                Remove-Item -Path "package-lock.json" -Force
+            }
         }
 
         #default to root/eng/emitter-package.json but you can override by writing
@@ -53,7 +55,13 @@ function NpmInstallForProject([string]$workingDirectory) {
             "registry=https://pkgs.dev.azure.com/azure-sdk/public/_packaging/azure-sdk-for-js-test-autorest/npm/registry/ `n`nalways-auth=true" | Out-File '.npmrc'
         }
 
-        npm install --no-lock-file
+        $npmCommand = "npm install"
+        if (!$useDevRepo) {
+            $npmCommand += " --no-package-lock"
+        }
+
+        Invoke-Expression $npmCommand
+
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
     }
     finally {
@@ -70,14 +78,24 @@ $configuration = Get-Content -Path $typespecConfigurationFile -Raw | ConvertFrom
 
 $specSubDirectory = $configuration["directory"]
 $innerFolder = Split-Path $specSubDirectory -Leaf
+$useDevRepo = $false
 
-$tempFolder = "$ProjectDirectory/TempTypeSpecFiles"
-$npmWorkingDir = Resolve-Path $tempFolder/$innerFolder
+if ($configuration["devRepoPath"]) {
+    $tempFolder = Join-Path "$($configuration["devRepoPath"])" "$specSubDirectory"
+    $npmWorkingDir = Resolve-Path $tempFolder
+
+    $useDevRepo = $true
+}
+else {
+    $tempFolder = "$ProjectDirectory/TempTypeSpecFiles"
+    $npmWorkingDir = Resolve-Path $tempFolder/$innerFolder
+}
+
 $mainTypeSpecFile = If (Test-Path "$npmWorkingDir/client.*") { Resolve-Path "$npmWorkingDir/client.*" } Else { Resolve-Path "$npmWorkingDir/main.*"}
 
 try {
     Push-Location $npmWorkingDir
-    NpmInstallForProject $npmWorkingDir
+    NpmInstallForProject $npmWorkingDir $useDevRepo
 
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
@@ -108,7 +126,7 @@ finally {
     Pop-Location
 }
 
-$shouldCleanUp = !$SaveInputs
+$shouldCleanUp = !($SaveInputs -or $useDevRepo)
 if ($shouldCleanUp) {
     Remove-Item $tempFolder -Recurse -Force
 }

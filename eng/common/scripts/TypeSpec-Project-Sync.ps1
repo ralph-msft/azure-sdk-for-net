@@ -102,7 +102,12 @@ $projectName = $pieces[$pieces.Count - 2]
 $specSubDirectory = $configuration["directory"]
 
 # use local spec repo if provided
-if ($LocalSpecRepoPath) {
+if ($configuration["devRepoPath"]) {
+  $specCloneDir = Resolve-Path "$($configuration["devRepoPath"])"
+  Write-Warning "Using existing local repo: '$specCloneDir'"
+  exit 0
+}
+elseif ($LocalSpecRepoPath) {
   $specCloneDir = $LocalSpecRepoPath
 }
 elseif ($configuration["repo"] -and $configuration["commit"]) {
