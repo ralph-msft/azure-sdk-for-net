@@ -1,5 +1,5 @@
+cloneDir: ../../../../TypeSpec
+commit: 099640c73c1af7f9410f184d204807f9d0da2edb
 directory: specification/cognitiveservices/OpenAI.Inference
-commit: f6bf6555a71cb3167dcff04cc7964bda9ae36a88
-repo: Azure/azure-rest-api-specs
-devEnlistment: ..\..\..\..\typespec
+repo: ralph-msft/azure-rest-api-specs
 
