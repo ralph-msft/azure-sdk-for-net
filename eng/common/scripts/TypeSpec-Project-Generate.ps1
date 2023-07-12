@@ -69,38 +69,59 @@ function NpmInstallForProject([string]$workingDirectory, [bool]$keepLocal) {
     }
 }
 
+function GetSpecCloneDir([string]$projectName) {
+  Push-Location $ProjectDirectory
+  try {
+    $root = git rev-parse --show-toplevel
+  }
+  finally {
+    Pop-Location
+  }
+
+  return "$root/../sparse-spec/$projectName"
+}
+
 $resolvedProjectDirectory = Resolve-Path $ProjectDirectory
 $emitterName = &$GetEmitterNameFn
-$typespecConfigurationFile = Resolve-Path "$ProjectDirectory/tsp-location.yaml"
+$typespecConfigurationFile = Join-Path $resolvedProjectDirectory "tsp-location.yaml"
 
 Write-Host "Reading configuration from $typespecConfigurationFile"
 $configuration = Get-Content -Path $typespecConfigurationFile -Raw | ConvertFrom-Yaml
 
 $specSubDirectory = $configuration["directory"]
 $innerFolder = Split-Path $specSubDirectory -Leaf
-$devMode = $ENV:ENABLE_TYPESPEC_DEV_REPO -eq "1" -and $configuration["devEnlistment"]
+$updateFromTypeSpecRepo = $ENV:AZURE_DEV_UPDATEFROMTYPESPECCLONE -eq "1"
 
-if ($devMode) {
-    # dev enlistment directory may be relative to tsp-location.yaml file so change to that directory
+if ($updateFromTypeSpecRepo) {
+  $cloneDir = $configuration["cloneDir"]
+  if (!$cloneDir) {
+    $cloneDir = GetSpecCloneDir $(Split-Path $resolvedProjectDirectory -Leaf)
+    $cloneDir = Resolve-Path $cloneDir
+  }
+  else {
+    # clone directory may be relative to tsp-location.yaml file so change to that directory
     Push-Location (Split-Path -Parent $typespecConfigurationFile)
     try {
-        $tempFolder = Join-Path (Resolve-Path $configuration["devEnlistment"]) "$specSubDirectory"
-        $npmWorkingDir = $tempFolder
+      $cloneDir = Resolve-Path $cloneDir
     }
     finally {
-        Pop-Location
+      Pop-Location
     }
+  }
+
+  $tempFolder = Join-Path "$cloneDir" "$specSubDirectory"
+  $npmWorkingDir = $tempFolder
 }
 else {
-    $tempFolder = "$ProjectDirectory/TempTypeSpecFiles"
-    $npmWorkingDir = Resolve-Path $tempFolder/$innerFolder
+    $tempFolder = Resolve-Path (Join-Path $ProjectDirectory "TempTypeSpecFiles")
+    $npmWorkingDir = Join-Path $tempFolder $innerFolder
 }
 
 $mainTypeSpecFile = If (Test-Path "$npmWorkingDir/client.*") { Resolve-Path "$npmWorkingDir/client.*" } Else { Resolve-Path "$npmWorkingDir/main.*"}
 
 try {
     Push-Location $npmWorkingDir
-    NpmInstallForProject $npmWorkingDir $devMode
+    NpmInstallForProject $npmWorkingDir $updateFromTypeSpecRepo
 
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
@@ -131,7 +152,7 @@ finally {
     Pop-Location
 }
 
-$shouldCleanUp = !($SaveInputs -or $devMode)
+$shouldCleanUp = !($SaveInputs -or $updateFromTypeSpecRepo)
 if ($shouldCleanUp) {
     Remove-Item $tempFolder -Recurse -Force
 }

@@ -21,9 +21,11 @@ function AddSparseCheckoutPath([string]$subDirectory) {
 }
 
 function CopySpecToProjectIfNeeded([string]$specCloneRoot, [string]$mainSpecDir, [string]$dest, [string[]]$specAdditionalSubDirectories) {
-  $source = Join-Path $specCloneRoot $mainSpecDir
-  Copy-Item -Path $source -Destination $dest -Recurse -Force
+  $source = Join-Path $specCloneRoot $mainSpecDir "*"
+  $dest = Join-Path $dest (Split-Path $mainSpecDir -Leaf)
+  New-Item -Path $dest -ItemType Directory -Force | Out-Null
   Write-Host "Copying spec from $source to $dest"
+  Copy-Item -Path $source -Destination $dest -Recurse -Force -Exclude @("node_modules", ".package_lock.json", "package_lock.json")
 
   foreach ($additionalDir in $specAdditionalSubDirectories) {
     $source = Join-Path $specCloneRoot $additionalDir
@@ -69,6 +71,44 @@ function GetGitRemoteValue([string]$repo) {
   return $result
 }
 
+function GetGitInfo([string]$cloneDir) {
+  $info = @{
+    "dir" = resolve-path $cloneDir
+    "url" = $null
+    "repo" = $null
+    "commit" = $null
+  }
+
+  Push-Location $info.dir
+  try {
+    [uri]$info.url = (git config --get remote.origin.url) ?? (git config --get remote.main.url)
+    if (!$info.url) {
+        throw "'$($info.dir)' does not appear to be a GitHub repo"
+    }
+
+    if ($info.url.IsAbsoluteUri) {
+      if ($info.url.Scheme -ne "https" -or $info.url.Host -notlike "*github.com") {
+        throw "'$($info.dir)' is not a GitHub repo ($($info.url))"
+      }
+
+      $info.repo = $info.url.LocalPath.TrimStart("/").TrimEnd(".git")
+    }
+    elseif ($info.url.OriginalString -match "^git@github.com:(?<subPath>.*)\.git") {
+      $info.repo = $Matches.subPath
+    }
+    else {
+      throw "'$($info.dir)' has an unknown git remote format ($($info.url))"
+    }
+
+    $info.commit = $(git log --format="%H" -n 1)
+  }
+  finally {
+    Pop-Location
+  }
+
+  return $info
+}
+
 function InitializeSparseGitClone([string]$repo) {
   git clone --no-checkout --filter=tree:0 $repo .
   if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -86,68 +126,62 @@ function GetSpecCloneDir([string]$projectName) {
     Pop-Location
   }
 
-  $sparseSpecCloneDir = "$root/../sparse-spec/$projectName"
-  New-Item $sparseSpecCloneDir -Type Directory -Force | Out-Null
-  $createResult = Resolve-Path $sparseSpecCloneDir
-  return $createResult
+  return "$root/../sparse-spec/$projectName"
+}
+
+function ConvertToOrderedDictionary() {
+  [CmdletBinding()]
+  param (
+    [Parameter(Mandatory,ValueFromPipeline)]
+    [ValidateNotNullOrEmpty()]
+    [hashtable] $hash
+  )
+  $ordered = [ordered]@{}
+  foreach ($key in ($hash.Keys | Sort-Object)) {
+    $ordered.Add($key, $hash[$key])
+  }
+  return $ordered
 }
 
 $typespecConfigurationFile = Resolve-Path "$ProjectDirectory/tsp-location.yaml"
 Write-Host "Reading configuration from $typespecConfigurationFile"
-$configuration = Get-Content -Path $typespecConfigurationFile -Raw | ConvertFrom-Yaml
+$configuration = Get-Content -Path $typespecConfigurationFile -Raw | ConvertFrom-Yaml | ConvertToOrderedDictionary
 
 $pieces = $typespecConfigurationFile.Path.Replace("\", "/").Split("/")
 $projectName = $pieces[$pieces.Count - 2]
 
 $specSubDirectory = $configuration["directory"]
 $gitCloneNeeded = $false;
-$devMode = $ENV:ENABLE_TYPESPEC_DEV_REPO -eq "1" -and $configuration["devEnlistment"]
+$updateFromTypeSpecRepo = $ENV:AZURE_DEV_UPDATEFROMTYPESPECCLONE -eq "1"
 
-# check if development mode is enabled
-if ($devMode) {
-  $specCloneDir = $configuration["devEnlistment"]
-
-  # dev enlistment directory may be relative to tsp-location.yaml file so change to that directory
-  Push-Location (Split-Path -Parent $typespecConfigurationFile)
-  try {
-    if (!(Test-Path $specCloneDir)) {
-      $gitCloneNeeded = $true
-      New-Item "$specCloneDir" -ItemType Directory -Force | Out-Null
+if ($updateFromTypeSpecRepo) {
+  $specCloneDir = $configuration["cloneDir"]
+  if (!$specCloneDir) {
+    $specCloneDir = GetSpecCloneDir $projectName
+    if (Test-Path $specCloneDir) {
       $specCloneDir = Resolve-Path $specCloneDir
     }
-
-    $specCloneDir = Resolve-Path $specCloneDir
-    Write-Warning "Using developer mode with local repo: '$specCloneDir'"
+    else {
+      $gitCloneNeeded = $true
+    }
   }
-  finally {
-    Pop-Location
-  }
-
-  if (!$gitCloneNeeded) {
-    Push-Location $specCloneDir
+  else {
+    # clone directory may be relative to tsp-location.yaml file so change to that directory
+    Push-Location (Split-Path -Parent $typespecConfigurationFile)
     try {
-      $remoteUrl = [uri]$(git config --get remote.origin.url)
-      if ($remoteUrl.Scheme -ne "https" -or $remoteUrl.Host -notlike "*github.com") {
-        Write-Error "Local enlistment at '$specCloneDir' is not a GitHub repo ($remoteUrl)"
-        exit 1
+      if (!(Test-Path $specCloneDir)) {
+        $gitCloneNeeded = $true
+        New-Item "$specCloneDir" -ItemType Directory -Force | Out-Null
       }
 
-      $githubRepo = $remoteUrl.LocalPath.TrimStart("/").TrimEnd(".git")
-      $githubCommit = $(git log --format="%H" -n 1)
+      $specCloneDir = Resolve-Path $specCloneDir
     }
     finally {
       Pop-Location
     }
-
-    # update rempote url and commit as needed
-    if (($githubRepo -ne $configuration["repo"]) -or ($githubCommit -ne $configuration["commit"])) {
-      Write-Host "Updating tsp-location.yaml with new repo and/or commit"
-      $configuration["repo"] = $githubRepo
-      $configuration["commit"] = $githubCommit
-
-      $configuration | Sort-Object -Property Name | ConvertTo-Yaml | Out-File $typespecConfigurationFile -Encoding utf8NoBOM
-    }
   }
+
+  Write-Warning "Auto updating from TypeSpec local clone: '$specCloneDir'"
 }
 # use local spec repo if provided
 elseif ($LocalSpecRepoPath) {
@@ -171,6 +205,11 @@ if ($gitCloneNeeded) {
   Write-Host "from tsplocation.yaml 'repo' is:"$configuration["repo"]
   Write-Host "Setting up sparse clone for $projectName at $specCloneDir"
 
+  if (!(Test-Path $specCloneDir)) {
+    New-Item "$specCloneDir" -ItemType Directory -Force | Out-Null
+  }
+  $specCloneDir = Resolve-Path $specCloneDir
+
   Push-Location $specCloneDir.Path
   try {
     if (!(Test-Path ".git")) {
@@ -189,7 +228,19 @@ if ($gitCloneNeeded) {
   }
 }
 
-if (!$devMode) {
+if ($updateFromTypeSpecRepo) {
+  $gitInfo = GetGitInfo $specCloneDir
+
+  # update rempote url and commit as needed
+  if (($gitInfo.repo -ne $configuration["repo"]) -or ($gitInfo.commit -ne $configuration["commit"])) {
+    Write-Warning "Updating tsp-location.yaml with new repo and/or commit"
+    $configuration["repo"] = $gitInfo.repo
+    $configuration["commit"] = $gitInfo.commit
+
+    $configuration | ConvertTo-Yaml | Out-File $typespecConfigurationFile -Encoding utf8NoBOM
+  }
+}
+else {
   $tempTypeSpecDir = "$ProjectDirectory/TempTypeSpecFiles"
   New-Item $tempTypeSpecDir -Type Directory -Force | Out-Null
   CopySpecToProjectIfNeeded `
